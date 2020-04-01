@@ -8,6 +8,9 @@
 #include <FS.h>
 #include <ArduinoJson.h>
 #include "SPIFFS.h"
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_PCD8544.h>
 
 #define WEBSERVER_PORT 80
 #define JSON_CONFIG_FILE_NAME "/config.json" 
@@ -138,6 +141,7 @@ volatile byte cadenceTicks = 0;
 volatile byte speedTicks = 0 ;
 TaskHandle_t ComputeValuesTask;
 TaskHandle_t DisplayValuesTask ;
+Adafruit_PCD8544 display = Adafruit_PCD8544(7, 6, 5, 4, 3);
 
 void setupWifi()
 {
@@ -296,13 +300,27 @@ void ComputeValues( void * pvParameters )
        gSpeed  = distanceTravelled/timeFrame ;  // Speed  in meters per second      
        gSpeed  = gSpeed * 3.6 ; // convert m/sec into Km/hr 
        speedTicks =  0 ;
+       gTripDistance =gTripDistance + distanceTravelled ; // In Meters 
+
      }
      
-     gTripDistance =gTripDistance + distanceTravelled ; // In Meters 
      delay(1000) ;
   }
 }
+void SetupDisplay()
+{
+  
+   display.begin();
+   display.display(); // show splashscreen
+   delay(2000);
+   display.clearDisplay();   // clears the screen and buffer
 
+  // draw a single pixel
+   display.drawPixel(10, 10, BLACK);
+   display.display();
+   delay(2000);
+   display.clearDisplay();
+}
 void setup() 
 {
  
@@ -324,6 +342,7 @@ void setup()
  
   setupWebHandler();
   Serial.printf("Web Server configuration: Success \n");
+  SetupDisplay();
   xTaskCreatePinnedToCore(
                     ComputeValues,   /* Task function. */
                     "Task1",     /* name of task. */
