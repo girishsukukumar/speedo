@@ -141,8 +141,15 @@ volatile byte cadenceTicks = 0;
 volatile byte speedTicks = 0 ;
 TaskHandle_t ComputeValuesTask;
 TaskHandle_t DisplayValuesTask ;
-Adafruit_PCD8544 display = Adafruit_PCD8544(7, 6, 5, 4, 3);
-
+// Software SPI (slower updates, more flexible pin options):
+// pin 7 - Serial clock out (SCLK)
+// pin 6 - Serial data out (DIN)
+// pin 5 - Data/Command select (D/C)
+// pin 4 - LCD chip select (CS)
+// pin 3 - LCD reset (RST)
+//Adafruit_PCD8544 display = Adafruit_PCD8544(7, 6, 5, 4, 3);
+//                                          SCLK   DIN    DC   CS    RST
+Adafruit_PCD8544 display = Adafruit_PCD8544( 14,    13,   27,  15,    26);
 void setupWifi()
 {
 
@@ -264,18 +271,36 @@ void DisplayConfigValues()
    Serial.printf("ssid3 %s \n",ConfigData.ssid3);
    Serial.printf("Password3 %s \n", ConfigData.password3);
 
-   Serial.printf("Wheel Circumference = %f", ConfigData.wheelCirumference);
+   Serial.printf("Wheel Circumference = %f\n", ConfigData.wheelCirumference);
    Serial.printf("Device name = %s ", ConfigData.wifiDeviceName);
 }
 void DisplayValues( void * pvParameters )
 {
-  
+  boolean flag ;
+  float distance ;
+  flag = true ;
+
+  while(flag)
+  {
+    display.display();
+    display.clearDisplay();
+    distance = gTripDistance /1000 ; //Convert into KM
+  // text display tests
+  display.setTextSize(2);
+  display.setTextColor(BLACK);
+  display.setCursor(0,0);
+  //display.printf("Hello, world!");
+  display.printf("C:%0.1f\n",gRPM);
+  display.printf("S:%0.1f\n",gSpeed);
+  display.printf("D:%0.1f\n",distance);
+    delay(3000);
+  }
 }
 void ComputeValues( void * pvParameters )
 {
   int currentTime  ;
   int diff ;
-  Serial.printf("Core ID where ComputerValues running is : ");
+  Serial.printf("Core ID where Computer Values running is : ");
   Serial.println(xPortGetCoreID());
 
   while(1)
@@ -288,6 +313,7 @@ void ComputeValues( void * pvParameters )
        float timeSlots = 60000/diff ;
        gRPM =  cadenceTicks * timeSlots ;
        cadenceTicks = 0 ;
+       gLastRPMComputedTime = currentTime ;
      }
      
      diff = currentTime - gLastSpeedComputedTime ;
@@ -300,26 +326,80 @@ void ComputeValues( void * pvParameters )
        gSpeed  = distanceTravelled/timeFrame ;  // Speed  in meters per second      
        gSpeed  = gSpeed * 3.6 ; // convert m/sec into Km/hr 
        speedTicks =  0 ;
-       gTripDistance =gTripDistance + distanceTravelled ; // In Meters 
+       gTripDistance =gTripDistance + distanceTravelled ; // In Meters
+       gLastSpeedComputedTime = currentTime ;
 
      }
      
      delay(1000) ;
   }
 }
+void testdrawline() {  
+  for (int16_t i=0; i<display.width(); i+=4) {
+    display.drawLine(0, 0, i, display.height()-1, BLACK);
+    display.display();
+  }
+  for (int16_t i=0; i<display.height(); i+=4) {
+    display.drawLine(0, 0, display.width()-1, i, BLACK);
+    display.display();
+  }
+  delay(250);
+  
+  display.clearDisplay();
+  for (int16_t i=0; i<display.width(); i+=4) {
+    display.drawLine(0, display.height()-1, i, 0, BLACK);
+    display.display();
+  }
+  for (int8_t i=display.height()-1; i>=0; i-=4) {
+    display.drawLine(0, display.height()-1, display.width()-1, i, BLACK);
+    display.display();
+  }
+  delay(250);
+  
+  display.clearDisplay();
+  for (int16_t i=display.width()-1; i>=0; i-=4) {
+    display.drawLine(display.width()-1, display.height()-1, i, 0, BLACK);
+    display.display();
+  }
+  for (int16_t i=display.height()-1; i>=0; i-=4) {
+    display.drawLine(display.width()-1, display.height()-1, 0, i, BLACK);
+    display.display();
+  }
+  delay(250);
+
+  display.clearDisplay();
+  for (int16_t i=0; i<display.height(); i+=4) {
+    display.drawLine(display.width()-1, 0, 0, i, BLACK);
+    display.display();
+  }
+  for (int16_t i=0; i<display.width(); i+=4) {
+    display.drawLine(display.width()-1, 0, i, display.height()-1, BLACK); 
+    display.display();
+  }
+  delay(250);
+}
+
 void SetupDisplay()
 {
-  
+   Serial.printf("Setup Display");
    display.begin();
+   display.setContrast(60);
+
    display.display(); // show splashscreen
    delay(2000);
    display.clearDisplay();   // clears the screen and buffer
+    Serial.printf("Drawing lines\n");
 
-  // draw a single pixel
-   display.drawPixel(10, 10, BLACK);
-   display.display();
-   delay(2000);
-   display.clearDisplay();
+  // draw many lines
+  testdrawline();
+  display.display();
+  delay(2000);
+  display.clearDisplay();
+  
+  display.display();
+  display.clearDisplay();
+
+   
 }
 void setup() 
 {
@@ -366,6 +446,7 @@ void setup()
 void loop() 
 {
   webServer.handleClient();
+
   // put your main code here, to run repeatedly:
 
 }
