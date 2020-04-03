@@ -11,6 +11,8 @@
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_PCD8544.h>
+#include "RemoteDebug.h"  //https://github.com/JoaoLopesF/RemoteDebug
+
 
 #define WEBSERVER_PORT 80
 #define JSON_CONFIG_FILE_NAME "/config.json" 
@@ -21,6 +23,8 @@
 
 
 WebServer webServer(WEBSERVER_PORT);
+RemoteDebug Debug;
+
 
 typedef struct configData 
 {
@@ -306,6 +310,8 @@ void ComputeValues( void * pvParameters )
   while(1)
   {
      currentTime = millis(); 
+     debugV("cadenceTicks = %u", cadenceTicks);
+     debugV("speedTicks = %u", speedTicks);
 
      diff = currentTime -gLastRPMComputedTime ;
      if (diff > 3000)
@@ -391,10 +397,10 @@ void SetupDisplay()
     Serial.printf("Drawing lines\n");
 
   // draw many lines
-  testdrawline();
-  display.display();
-  delay(2000);
-  display.clearDisplay();
+ // testdrawline();
+  // display.display();
+  //delay(2000);
+  // display.clearDisplay();
   
   display.display();
   display.clearDisplay();
@@ -406,13 +412,13 @@ void setup()
  
   Serial.begin(115200);
   Serial.printf("Speedo");
- 
-  pinMode(SPEED_PIN, INPUT_PULLUP);
+   pinMode(CADENCE_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(CADENCE_PIN), cadencePinHandler, FALLING);
-  
-  pinMode(CADENCE_PIN, INPUT_PULLUP);
+
+  pinMode(SPEED_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(SPEED_PIN), speedPinHandler, FALLING);
   SPIFFS.begin(true) ;
+  
   
   ReadConfigValuesFromSPIFFS();
   DisplayConfigValues();
@@ -421,6 +427,12 @@ void setup()
   Serial.printf("WifiSetup : Success \n");
  
   setupWebHandler();
+  
+  Debug.begin(ConfigData.wifiDeviceName); // Initialize the WiFi server
+  Debug.setResetCmdEnabled(true); // Enable the reset command
+  Debug.showProfiler(true); // Profiler (Good to measure times, to optimize codes)
+  Debug.showColors(true); // Colors
+
   Serial.printf("Web Server configuration: Success \n");
   SetupDisplay();
   xTaskCreatePinnedToCore(
@@ -446,6 +458,10 @@ void setup()
 void loop() 
 {
   webServer.handleClient();
+  Debug.handle();
+  yield();
+
+
 
   // put your main code here, to run repeatedly:
 
