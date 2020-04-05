@@ -12,6 +12,9 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_PCD8544.h>
 #include "RemoteDebug.h"  //https://github.com/JoaoLopesF/RemoteDebug
+#define USE_ARDUINO_INTERRUPTS true
+#include <PulseSensorPlayground.h>
+
 
 
 #define WEBSERVER_PORT 80
@@ -49,7 +52,7 @@ float gSpeed = 0.0 ;
 float gTripDistance = 0.0 ;
 float gLastRPMComputedTime = 0 ;
 float gLastSpeedComputedTime = 0 ; 
-
+int   gHeartRate = 0 ;
 
 
 /*
@@ -137,23 +140,32 @@ const char* serverIndex =
  "});"
  "</script>";
 
- 
+const int PULSE_INPUT = 34;
 const byte CADENCE_PIN= 18 ;
 const byte SPEED_PIN = 19 ;
+const int THRESHOLD = 550;   // Adjust this number to avoid noise when idle
 
 volatile byte cadenceTicks = 0;
 volatile byte speedTicks = 0 ;
 TaskHandle_t ComputeValuesTask;
 TaskHandle_t DisplayValuesTask ;
+TaskHandle_t MeasureHeartRateTask ;
+
+PulseSensorPlayground pulseSensor;
 // Software SPI (slower updates, more flexible pin options):
-// pin 7 - Serial clock out (SCLK)
-// pin 6 - Serial data out (DIN)
-// pin 5 - Data/Command select (D/C)
-// pin 4 - LCD chip select (CS)
-// pin 3 - LCD reset (RST)
+// GPIO14 - Serial clock out (SCLK)
+// GPIO13 - Serial data out (DIN)
+// GPIO27 - Data/Command select (D/C)
+// GPIO15 - LCD chip select (CS)
+// GPIO26 - LCD reset (RST)
 //Adafruit_PCD8544 display = Adafruit_PCD8544(7, 6, 5, 4, 3);
-//                                          SCLK   DIN    DC   CS    RST
+
+// How connection are made to Display in ESP32
+//         *DISPLAY PINS                    SCLK   DIN    DC   CS     RST
+//                                            |      |    |     |      | 
+//                                            V      V    V     V      V
 Adafruit_PCD8544 display = Adafruit_PCD8544( 14,    13,   27,  15,    26);
+
 void setupWifi()
 {
 
@@ -230,7 +242,7 @@ void ReadConfigValuesFromSPIFFS()
   const size_t capacity = JSON_OBJECT_SIZE(8) + 240;
   DynamicJsonDocument doc(capacity);
 
-  const char* json = "{\"ssid1\":\"xxxxxxxxxxxxxxxxxxxx\",\"password1\":\"xxxxxxxxxxxxxxxxxxxx\",\"ssid2\":\"xxxxxxxxxxxxxxxxxxxx\",\"password2\":\"xxxxxxxxxxxxxxxxxxxx\",\"ssid3\":\"xxxxxxxxxxxxxxxxxxxx\",\"password3\":\"xxxxxxxxxxxxxxx\",\"wheelDiameter\":85.99,\"devicename\":\"xxxxxxxxxxxxxx\"}";
+  //const char* json = "{\"ssid1\":\"xxxxxxxxxxxxxxxxxxxx\",\"password1\":\"xxxxxxxxxxxxxxxxxxxx\",\"ssid2\":\"xxxxxxxxxxxxxxxxxxxx\",\"password2\":\"xxxxxxxxxxxxxxxxxxxx\",\"ssid3\":\"xxxxxxxxxxxxxxxxxxxx\",\"password3\":\"xxxxxxxxxxxxxxx\",\"wheelDiameter\":85.99,\"devicename\":\"xxxxxxxxxxxxxx\"}";
   
   jsonFile = SPIFFS.open(JSON_CONFIG_FILE_NAME, FILE_READ);
   
@@ -251,6 +263,7 @@ void ReadConfigValuesFromSPIFFS()
   float wheelDiameter = doc["wheelDiameter"]; // 85.99
   const char* devicename = doc["devicename"]; // "xxxxxxxxxxxxxx"
   jsonFile.close();
+  
   strcpy(ConfigData.ssid1,ssid1);
   strcpy(ConfigData.password1,password1);
   
@@ -286,18 +299,58 @@ void DisplayValues( void * pvParameters )
 
   while(flag)
   {
+    distance = gTripDistance /1000 ; //Convert into KM
+
     display.display();
     display.clearDisplay();
-    distance = gTripDistance /1000 ; //Convert into KM
-  // text display tests
-  display.setTextSize(2);
-  display.setTextColor(BLACK);
-  display.setCursor(0,0);
-  //display.printf("Hello, world!");
-  display.printf("C:%0.1f\n",gRPM);
-  display.printf("S:%0.1f\n",gSpeed);
-  display.printf("D:%0.1f\n",distance);
+
+    display.setTextSize(2);
+    display.setTextColor(BLACK);
+    display.setCursor(0,0);
+  
+    display.printf("C:%0.1f\n",gRPM);
+    display.printf("S:%0.1f\n",gSpeed);
+    display.printf("D:%0.1f\n",distance);
+
     delay(3000);
+//    display.display();
+//    display.clearDisplay();
+//    display.setTextSize(2);
+//    display.setTextColor(BLACK);
+//    display.setCursor(0,0);
+//    display.printf("HR:%d\n",gHeartRate);
+//
+//    delay(1000);
+ 
+  }
+}
+void MeasureHeartRate( void * pvParameters )
+{
+  boolean flag ;
+  float distance ;
+  boolean  pulseSensorReady= true ;
+  flag = true ;
+
+  pulseSensor.analogInput(PULSE_INPUT);
+  pulseSensor.setThreshold(THRESHOLD);
+  if (!pulseSensor.begin()) 
+  {
+     pulseSensorReady = false ;
+  }
+
+
+  while(flag)
+  {
+     if (pulseSensorReady == false)
+     {
+         gHeartRate  = -1 ;
+     }
+     else
+     {
+        delay(20);
+        gHeartRate = pulseSensor.getBeatsPerMinute();
+     }
+     delay(2) ; 
   }
 }
 void ComputeValues( void * pvParameters )
@@ -317,6 +370,7 @@ void ComputeValues( void * pvParameters )
      if (diff > 3000)
      {
        float timeSlots = 60000/diff ;
+       debugV("FOR COMPUTE cadenceTicks = %u", cadenceTicks);
        gRPM =  cadenceTicks * timeSlots ;
        cadenceTicks = 0 ;
        gLastRPMComputedTime = currentTime ;
@@ -340,50 +394,6 @@ void ComputeValues( void * pvParameters )
      delay(1000) ;
   }
 }
-void testdrawline() {  
-  for (int16_t i=0; i<display.width(); i+=4) {
-    display.drawLine(0, 0, i, display.height()-1, BLACK);
-    display.display();
-  }
-  for (int16_t i=0; i<display.height(); i+=4) {
-    display.drawLine(0, 0, display.width()-1, i, BLACK);
-    display.display();
-  }
-  delay(250);
-  
-  display.clearDisplay();
-  for (int16_t i=0; i<display.width(); i+=4) {
-    display.drawLine(0, display.height()-1, i, 0, BLACK);
-    display.display();
-  }
-  for (int8_t i=display.height()-1; i>=0; i-=4) {
-    display.drawLine(0, display.height()-1, display.width()-1, i, BLACK);
-    display.display();
-  }
-  delay(250);
-  
-  display.clearDisplay();
-  for (int16_t i=display.width()-1; i>=0; i-=4) {
-    display.drawLine(display.width()-1, display.height()-1, i, 0, BLACK);
-    display.display();
-  }
-  for (int16_t i=display.height()-1; i>=0; i-=4) {
-    display.drawLine(display.width()-1, display.height()-1, 0, i, BLACK);
-    display.display();
-  }
-  delay(250);
-
-  display.clearDisplay();
-  for (int16_t i=0; i<display.height(); i+=4) {
-    display.drawLine(display.width()-1, 0, 0, i, BLACK);
-    display.display();
-  }
-  for (int16_t i=0; i<display.width(); i+=4) {
-    display.drawLine(display.width()-1, 0, i, display.height()-1, BLACK); 
-    display.display();
-  }
-  delay(250);
-}
 
 void SetupDisplay()
 {
@@ -392,49 +402,56 @@ void SetupDisplay()
    display.setContrast(60);
 
    display.display(); // show splashscreen
-   delay(2000);
-   display.clearDisplay();   // clears the screen and buffer
-    Serial.printf("Drawing lines\n");
-
-  // draw many lines
- // testdrawline();
-  // display.display();
-  //delay(2000);
-  // display.clearDisplay();
-  
-  display.display();
-  display.clearDisplay();
-
-   
+   delay(1000);
+   display.clearDisplay();   // clears the screen and buffer   
 }
 void setup() 
 {
- 
+  SetupDisplay();
   Serial.begin(115200);
   Serial.printf("Speedo");
-   pinMode(CADENCE_PIN, INPUT_PULLUP);
+
+  pinMode(CADENCE_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(CADENCE_PIN), cadencePinHandler, FALLING);
 
   pinMode(SPEED_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(SPEED_PIN), speedPinHandler, FALLING);
+  display.display();
+  display.clearDisplay();
+
+  display.display();
+  display.clearDisplay();
+
+  display.setTextSize(2);
+  display.setTextColor(BLACK);
+  
+  display.setCursor(0,0);
+  display.printf("Sensors:Ready \n");
+
   SPIFFS.begin(true) ;
   
   
   ReadConfigValuesFromSPIFFS();
+  display.printf("Files:Ready\n");
+
   DisplayConfigValues();
   Serial.printf("Configuratio file reading : Success \n");
   setupWifi();
   Serial.printf("WifiSetup : Success \n");
+  display.printf("WiFi:Ready\n");
+
  
   setupWebHandler();
-  
+  display.printf("Web Server:Ready\n");
   Debug.begin(ConfigData.wifiDeviceName); // Initialize the WiFi server
   Debug.setResetCmdEnabled(true); // Enable the reset command
   Debug.showProfiler(true); // Profiler (Good to measure times, to optimize codes)
   Debug.showColors(true); // Colors
 
   Serial.printf("Web Server configuration: Success \n");
-  SetupDisplay();
+  delay(2000);
+  display.clearDisplay();
+  
   xTaskCreatePinnedToCore(
                     ComputeValues,   /* Task function. */
                     "Task1",     /* name of task. */
@@ -442,7 +459,7 @@ void setup()
                     NULL,        /* parameter of the task */
                     1,           /* priority of the task */
                     &ComputeValuesTask,      /* Task handle to keep track of created task */
-                    0);          /* pin task to core 0 */      
+                    1);          /* pin task to core 0 */      
 
   xTaskCreatePinnedToCore(
                     DisplayValues,   /* Task function. */
@@ -451,8 +468,19 @@ void setup()
                     NULL,        /* parameter of the task */
                     1,           /* priority of the task */
                     &DisplayValuesTask,      /* Task handle to keep track of created task */
-                    0);          /* pin task to core 0 */      
+                    1);          /* pin task to core 0 */      
 
+
+#if 0
+  xTask CreatePinnedToCore(
+                    MeasureHeartRate,   /* Task function. */
+                    "Task3",     /* name of task. */
+                    10000,       /* Stack size of task */
+                    NULL,        /* parameter of the task */
+                    1,           /* priority of the task */
+                    &MeasureHeartRateTask,      /* Task handle to keep track of created task */
+                    0);          /* pin task to core 0 */      
+#endif
 }
 
 void loop() 
