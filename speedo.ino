@@ -14,6 +14,8 @@
 #include "RemoteDebug.h"  //https://github.com/JoaoLopesF/RemoteDebug
 #define USE_ARDUINO_INTERRUPTS true
 #include <PulseSensorPlayground.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
 
 
 
@@ -25,8 +27,10 @@
 
 
 
-WebServer webServer(WEBSERVER_PORT);
+WebServer   webServer(WEBSERVER_PORT);
 RemoteDebug Debug;
+WiFiUDP     ntpUDP;
+NTPClient   timeClient(ntpUDP);
 
 
 typedef struct configData 
@@ -103,7 +107,8 @@ const char* loginIndex =
  * Server Index Page
  */
  
-const char* serverIndex = 
+const char* serverIndex = "<HTML>" 
+"<H1> Cyclo Computer Config Page </H1>"
 "<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
 "<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
    "<input type='file' name='update'>"
@@ -138,18 +143,21 @@ const char* serverIndex =
  "}"
  "});"
  "});"
- "</script>";
+ "</script>"
+ "</HTML>" ;
 
 const int PULSE_INPUT = 34;
 const byte CADENCE_PIN= 18 ;
 const byte SPEED_PIN = 19 ;
 const int THRESHOLD = 550;   // Adjust this number to avoid noise when idle
 
-volatile byte cadenceTicks = 0;
-volatile byte speedTicks = 0 ;
-TaskHandle_t ComputeValuesTask;
-TaskHandle_t DisplayValuesTask ;
-TaskHandle_t MeasureHeartRateTask ;
+volatile byte  cadenceTicks = 0;
+volatile byte  speedTicks = 0 ;
+TaskHandle_t   ComputeValuesTask;
+TaskHandle_t   DisplayValuesTask ;
+TaskHandle_t   MeasureHeartRateTask ;
+
+char   recordFileName[NAME_LEN];
 
 PulseSensorPlayground pulseSensor;
 // Software SPI (slower updates, more flexible pin options):
@@ -189,17 +197,29 @@ void setupWifi()
   WiFi.softAPdisconnect (true);   //Disable the Access point mode.
 
 }
+void showRecords()
+{
+  
+}
+void DisplayserverIndex()
+{
+    webServer.sendHeader("Connection", "close");
+    webServer.send(200, "text/html", serverIndex);
+
+}
+void DisplayLoginIndex()
+{
+    webServer.sendHeader("Connection", "close");
+    webServer.send(200, "text/html", loginIndex);
+
+}
 void setupWebHandler()
 {
    /*return index page which is stored in serverIndex */
-  webServer.on("/", HTTP_GET, []() {
-    webServer.sendHeader("Connection", "close");
-    webServer.send(200, "text/html", loginIndex);
-  });
-  webServer.on("/serverIndex", HTTP_GET, []() {
-    webServer.sendHeader("Connection", "close");
-    webServer.send(200, "text/html", serverIndex);
-  });
+
+  webServer.on("/showRecord", HTTP_POST, showRecords);
+  webServer.on("/", HTTP_GET, DisplayLoginIndex);
+  webServer.on("/serverIndex", HTTP_GET, DisplayserverIndex);
   /*handling uploading firmware file */
   webServer.on("/update", HTTP_POST, []() {
     webServer.sendHeader("Connection", "close");
@@ -295,11 +315,14 @@ void DisplayValues( void * pvParameters )
 {
   boolean flag ;
   float distance ;
+  File  recordFile ;
   flag = true ;
+  
 
   while(flag)
   {
     distance = gTripDistance /1000 ; //Convert into KM
+    recordFile =  SPIFFS.open(recordFileName, FILE_APPEND);
 
     display.display();
     display.clearDisplay();
@@ -311,16 +334,10 @@ void DisplayValues( void * pvParameters )
     display.printf("C:%0.1f\n",gRPM);
     display.printf("S:%0.1f\n",gSpeed);
     display.printf("D:%0.1f\n",distance);
-
+    recordFile.printf("%0.1f,%0.1f,%0.1f\n",
+                       gRPM,gSpeed,distance);
+    recordFile.close();
     delay(3000);
-//    display.display();
-//    display.clearDisplay();
-//    display.setTextSize(2);
-//    display.setTextColor(BLACK);
-//    display.setCursor(0,0);
-//    display.printf("HR:%d\n",gHeartRate);
-//
-//    delay(1000);
  
   }
 }
@@ -362,6 +379,7 @@ void ComputeValues( void * pvParameters )
 
   while(1)
   {
+     timeClient.update(); // Keep the device time up to date
      currentTime = millis(); 
      debugV("cadenceTicks = %u", cadenceTicks);
      debugV("speedTicks = %u", speedTicks);
@@ -399,7 +417,7 @@ void SetupDisplay()
 {
    Serial.printf("Setup Display");
    display.begin();
-   display.setContrast(60);
+   //display.setContrast(60);
 
    display.display(); // show splashscreen
    delay(1000);
@@ -407,6 +425,17 @@ void SetupDisplay()
 }
 void setup() 
 {
+  String formattedDate ;
+  String currentTime;
+  int    splitT;
+  String dayStamp;
+  int    len ;
+   char deviceDate[20];
+   char deviceTime[20];
+
+
+  int GMTOffset = 19800;
+
   SetupDisplay();
   Serial.begin(115200);
   Serial.printf("Speedo");
@@ -428,6 +457,7 @@ void setup()
   display.setCursor(0,0);
   display.printf("Sensors:Ready \n");
 
+
   SPIFFS.begin(true) ;
   
   
@@ -440,7 +470,19 @@ void setup()
   Serial.printf("WifiSetup : Success \n");
   display.printf("WiFi:Ready\n");
 
- 
+  timeClient.begin();
+  timeClient.setTimeOffset(GMTOffset); /* GMT + 5:30 hours */
+
+  formattedDate = timeClient.getFormattedDate(); 
+  currentTime = timeClient.getFormattedTime(); 
+   
+  splitT = formattedDate.indexOf("T");
+  dayStamp = formattedDate.substring(0, splitT);
+  len = dayStamp.length();
+  dayStamp.toCharArray(deviceDate,len+1);
+  len = currentTime.length();
+  currentTime.toCharArray(deviceTime,len+1);
+  sprintf(recordFileName,"/%s-%s.csv",deviceDate,deviceTime);
   setupWebHandler();
   display.printf("Web Server:Ready\n");
   Debug.begin(ConfigData.wifiDeviceName); // Initialize the WiFi server
