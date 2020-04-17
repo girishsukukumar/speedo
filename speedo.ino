@@ -15,7 +15,10 @@
 #define USE_ARDUINO_INTERRUPTS true
 #include <PulseSensorPlayground.h>
 #include <NTPClient.h>
-#include <WiFiUdp.h>
+#include "SPIFFS.h"
+ 
+#include <ESP8266FtpServer.h>
+
 
 
 
@@ -26,7 +29,7 @@
 #define NAME_LEN 20
 
 
-
+FtpServer ftpSrv; 
 WebServer   webServer(WEBSERVER_PORT);
 RemoteDebug Debug;
 WiFiUDP     ntpUDP;
@@ -109,6 +112,11 @@ const char* loginIndex =
  
 const char* serverIndex = "<HTML>" 
 "<H1> Cyclo Computer Config Page </H1>"
+"<TABLE>"
+"<TR>"
+"<TD> <form  action=\"/showRecord\" method=\"POST\"> <button type=\"submit\">Show files</button></form></TD>"
+"</TR>"
+"</TABLE>"
 "<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
 "<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
    "<input type='file' name='update'>"
@@ -199,7 +207,27 @@ void setupWifi()
 }
 void showRecords()
 {
-  
+    char fileList[200];
+        Serial.printf("showRecords");
+
+    File root = SPIFFS.open("/");
+ 
+  File file = root.openNextFile();
+
+  sprintf(fileList, "<HTML> <H1> List of Records <\H1> <OL>");
+  while(file)
+  {
+      char fileName[30] ;
+      sprintf(fileName,"<LI>  %s </LI>", fileName);
+      strcat(fileList,fileName);
+      file = root.openNextFile();
+  }
+  strcat(fileList,"<\OL> <\HTML>");
+      webServer.sendHeader("Connection", "close");
+    webServer.send(200, "text/html", fileList);
+    Serial.printf("%s \n", fileList);
+    
+
 }
 void DisplayserverIndex()
 {
@@ -427,12 +455,14 @@ void setup()
 {
   String formattedDate ;
   String currentTime;
-  int    splitT;
+  int    splitT, splitDash;
   String dayStamp;
+  String month ;
   int    len ;
    char deviceDate[20];
    char deviceTime[20];
-
+   char *monthArray[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul","Aug", "Sep", "Oct", "Nov", "Dec"};
+   int monthArrayIdx ;
 
   int GMTOffset = 19800;
 
@@ -460,6 +490,7 @@ void setup()
 
   SPIFFS.begin(true) ;
   
+  //SPIFFS.format();
   
   ReadConfigValuesFromSPIFFS();
   display.printf("Files:Ready\n");
@@ -473,23 +504,44 @@ void setup()
   timeClient.begin();
   timeClient.setTimeOffset(GMTOffset); /* GMT + 5:30 hours */
 
+  delay(2000);
+  timeClient.update(); // Keep the device time up to date
+  delay(5000);
+
   formattedDate = timeClient.getFormattedDate(); 
   currentTime = timeClient.getFormattedTime(); 
-   
+  Serial.printf("Current Date = %s \n", formattedDate);
+  Serial.printf("Current time = %s \n", currentTime);
+  currentTime.replace(':','_');
+  
   splitT = formattedDate.indexOf("T");
   dayStamp = formattedDate.substring(0, splitT);
+  Serial.println(dayStamp);
+
+  dayStamp.remove(0,5);
+  splitDash = dayStamp.indexOf("-");
+  month = dayStamp.substring(0,splitDash);
+  monthArrayIdx = month.toInt();
+  Serial.println(dayStamp);
+  Serial.println(month);
+  Serial.printf("Month idx = %d \n",monthArrayIdx);
+  dayStamp.remove(0,3);
+  
   len = dayStamp.length();
-  dayStamp.toCharArray(deviceDate,len+1);
+  dayStamp.toCharArray(deviceDate,len+1); // We got day of month
+  
   len = currentTime.length();
   currentTime.toCharArray(deviceTime,len+1);
-  sprintf(recordFileName,"/%s-%s.csv",deviceDate,deviceTime);
+  sprintf(recordFileName,"/%s%s%s.csv",deviceDate,monthArray[monthArrayIdx-1],deviceTime);
+  Serial.printf("File name = %s \n", recordFileName);
+  
   setupWebHandler();
   display.printf("Web Server:Ready\n");
   Debug.begin(ConfigData.wifiDeviceName); // Initialize the WiFi server
   Debug.setResetCmdEnabled(true); // Enable the reset command
   Debug.showProfiler(true); // Profiler (Good to measure times, to optimize codes)
   Debug.showColors(true); // Colors
-
+  ftpSrv.begin("esp8266","esp8266");
   Serial.printf("Web Server configuration: Success \n");
   delay(2000);
   display.clearDisplay();
@@ -528,6 +580,7 @@ void setup()
 void loop() 
 {
   webServer.handleClient();
+  ftpSrv.handleFTP();   
   Debug.handle();
   yield();
 
