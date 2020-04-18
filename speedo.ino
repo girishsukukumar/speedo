@@ -159,6 +159,8 @@ const byte CADENCE_PIN= 18 ;
 const byte SPEED_PIN = 19 ;
 const int THRESHOLD = 550;   // Adjust this number to avoid noise when idle
 
+volatile byte  prevCadenceTicks = 0;
+
 volatile byte  cadenceTicks = 0;
 volatile byte  speedTicks = 0 ;
 TaskHandle_t   ComputeValuesTask;
@@ -580,11 +582,17 @@ void setup()
 void loop() 
 {
   webServer.handleClient();
+  
   ftpSrv.handleFTP();   
+  
+  if (prevCadenceTicks != cadenceTicks )
+  {
+    Serial.printf("prev-%d current-%d s-%d\n",prevCadenceTicks, cadenceTicks,speedTicks);
+    prevCadenceTicks = cadenceTicks ;
+  }
+  
   Debug.handle();
   yield();
-
-
 
   // put your main code here, to run repeatedly:
 
