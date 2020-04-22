@@ -13,13 +13,15 @@
 #include <Adafruit_PCD8544.h>
 #include "RemoteDebug.h"  //https://github.com/JoaoLopesF/RemoteDebug
 #define USE_ARDUINO_INTERRUPTS true
-#include <PulseSensorPlayground.h>
 #include <NTPClient.h>
 #include "SPIFFS.h"
  
 #include <ESP8266FtpServer.h>
 
+#include "MAX30105.h"
 
+#include "heartRate.h"
+#include "spo2_algorithm.h"
 
 
 #define WEBSERVER_PORT 80
@@ -34,6 +36,24 @@ WebServer   webServer(WEBSERVER_PORT);
 RemoteDebug Debug;
 WiFiUDP     ntpUDP;
 NTPClient   timeClient(ntpUDP);
+MAX30105    maxSensor;
+
+const byte RATE_SIZE = 4; //Increase this for more averaging. 4 is good.
+byte rates[RATE_SIZE]; //Array of heart rates
+byte rateSpot = 0;
+long lastBeat = 0; //Time at which the last beat occurred
+
+float     beatsPerMinute;
+int       beatAvg;
+uint32_t  irBuffer[100]; //infrared LED sensor data
+uint32_t  redBuffer[100];  //red LED sensor data
+int32_t   bufferLength; //data length
+int32_t   spo2; //SPO2 value
+int8_t    validSPO2; //indicator to show if the SPO2 calculation is valid
+int32_t   heartRate; //heart rate value
+int8_t    validHeartRate; //indicator to show if the heart rate calculation is valid
+
+int8_t    idx =0;
 
 
 typedef struct configData 
@@ -60,7 +80,7 @@ float gTripDistance = 0.0 ;
 float gLastRPMComputedTime = 0 ;
 float gLastSpeedComputedTime = 0 ; 
 int   gHeartRate = 0 ;
-
+float bodyTempInCelius=0.0 ;
 
 /*
  * Login page
@@ -169,7 +189,6 @@ TaskHandle_t   MeasureHeartRateTask ;
 
 char   recordFileName[NAME_LEN];
 
-PulseSensorPlayground pulseSensor;
 // Software SPI (slower updates, more flexible pin options):
 // GPIO14 - Serial clock out (SCLK)
 // GPIO13 - Serial data out (DIN)
@@ -184,18 +203,39 @@ PulseSensorPlayground pulseSensor;
 //                                            V      V    V     V      V
 Adafruit_PCD8544 display = Adafruit_PCD8544( 14,    13,   27,  15,    26);
 
-void setupWifi()
+bool max30102Setup()
 {
+  // Initialize sensor
+  //Use default I2C port, 400kHz speed
+  if (!maxSensor.begin(Wire, I2C_SPEED_STANDARD,MAX30105_ADDRESS)) 
+  {
+     Serial.println("MAX30105 was not found. Please check wiring/power. ");
+     return false ;
+  }
 
+  maxSensor.setup(); //Configure sensor with default settings
+  maxSensor.setPulseAmplitudeRed(0x0A); //Turn Red LED to low to indicate sensor is running
+  maxSensor.setPulseAmplitudeGreen(0); //Turn off Green LED
+  maxSensor.enableDIETEMPRDY();
+  return true ;
+}
+bool setupWifi()
+{
+  int count ;
   wifiMulti.addAP(ConfigData.ssid1, ConfigData.password1);   
   wifiMulti.addAP(ConfigData.ssid2, ConfigData.password2);    
   wifiMulti.addAP(ConfigData.ssid3, ConfigData.password3);    
-
+  count  = 0 ;
   while  (wifiMulti.run()  !=  WL_CONNECTED) 
   { 
     //  Wait  for the Wi-Fi to  connect:  scan  for Wi-Fi networks, and connect to  the strongest of  the networks  above       
     delay(1000);        
     Serial.print('*');    
+    count++ ;
+    if (count > 20)
+    {
+       return false ;  
+    }
   }   
   delay(5000);
   WiFi.setHostname(ConfigData.wifiDeviceName);
@@ -205,7 +245,7 @@ void setupWifi()
   Serial.printf("IP  address: ");   
   Serial.println(WiFi.localIP()); 
   WiFi.softAPdisconnect (true);   //Disable the Access point mode.
-
+  return true ;
 }
 void showRecords()
 {
@@ -346,60 +386,131 @@ void DisplayValues( void * pvParameters )
   boolean flag ;
   float distance ;
   File  recordFile ;
+  byte rpm ;
+  byte Speed ;
   flag = true ;
-  
+
 
   while(flag)
   {
     distance = gTripDistance /1000 ; //Convert into KM
-    recordFile =  SPIFFS.open(recordFileName, FILE_APPEND);
 
     display.display();
     display.clearDisplay();
 
-    display.setTextSize(2);
     display.setTextColor(BLACK);
     display.setCursor(0,0);
-  
-    display.printf("C:%0.1f\n",gRPM);
-    display.printf("S:%0.1f\n",gSpeed);
-    display.printf("D:%0.1f\n",distance);
-    recordFile.printf("%0.1f,%0.1f,%0.1f\n",
-                       gRPM,gSpeed,distance);
-    recordFile.close();
+    display.setTextSize(1);
+    display.printf("RPM:");
+    rpm = (byte) gRPM ; // Display RPM as integer and not as float
+    display.setTextSize(2);
+    display.printf("%d\n",rpm);
+
+    Speed = round(gSpeed);
+    display.setTextSize(1);
+    display.printf("KM/H:");
+    display.setTextSize(2);
+    display.printf("%d\n",Speed);
+
+    display.setTextSize(1);
+    display.printf("HB:");
+    display.setTextSize(2);
+    display.printf("%d\n",gHeartRate);
+
+    delay(2000);
+
+    display.display();
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.printf("KM:");    
+    display.setTextSize(2);
+    display.printf("%0.1f\n",distance);
+
+    display.setTextSize(1);
+    display.printf("BT:");    
+    display.setTextSize(2);
+    display.printf("%0.1fC\n",bodyTempInCelius);
+    delay(2000);
+
+    if (gSpeed > 0)
+    {
+       String currentTime ;
+       int    len ; 
+       char   deviceTime[20] ;
+       
+       // Do not record while cycle is stopped.
+       
+       currentTime = timeClient.getFormattedTime(); 
+       
+       len = currentTime.length();
+       
+       currentTime.toCharArray(deviceTime,len+1);
+       
+       recordFile =  SPIFFS.open(recordFileName, FILE_APPEND);
+
+       recordFile.printf("%s, %0.1f,%0.1f,%0.1f, %d, %0.1f\n",
+                       deviceTime,gRPM,gSpeed,distance,gHeartRate,bodyTempInCelius);
+       recordFile.close();
+    }    
     delay(3000);
  
   }
 }
+
 void MeasureHeartRate( void * pvParameters )
 {
-  boolean flag ;
-  float distance ;
-  boolean  pulseSensorReady= true ;
-  flag = true ;
-
-  pulseSensor.analogInput(PULSE_INPUT);
-  pulseSensor.setThreshold(THRESHOLD);
-  if (!pulseSensor.begin()) 
+  if (max30102Setup() == false)
   {
-     pulseSensorReady = false ;
+    return ;
   }
+  while(1)
+  {  
+    long irValue = maxSensor.getIR();
+    idx++ ;
+    
+    bodyTempInCelius = maxSensor.readTemperature(); 
 
+    if (checkForBeat(irValue) == true)
+    {
+      //We sensed a beat!
+      long delta = millis() - lastBeat;
+      //Serial.printf("Delta = %d \n", delta);
+      lastBeat = millis();
 
-  while(flag)
-  {
-     if (pulseSensorReady == false)
-     {
-         gHeartRate  = -1 ;
-     }
-     else
-     {
-        delay(20);
-        gHeartRate = pulseSensor.getBeatsPerMinute();
-     }
-     delay(2) ; 
+      beatsPerMinute = 60 / (delta / 1000.0);
+
+      if (beatsPerMinute < 255 && beatsPerMinute > 20)
+      {
+        rates[rateSpot++] = (byte)beatsPerMinute; //Store this reading in the array
+        rateSpot %= RATE_SIZE; //Wrap variable
+
+        //Take average of readings
+        beatAvg = 0;
+        for (byte x = 0 ; x < RATE_SIZE ; x++)
+        {
+          beatAvg += rates[x];
+        }
+        beatAvg /= RATE_SIZE;
+      }
+    }
+
+    if (irValue > 50000)
+    {
+       if (idx == 100)
+      {
+         Serial.printf("Avg BPM:%d\n",beatAvg);
+         gHeartRate = beatAvg ;
+         idx = 0 ;
+      }
+    }
+    else
+    {
+      Serial.printf(" No finger?\n");
+    }
   }
 }
+
 void ComputeValues( void * pvParameters )
 {
   int currentTime  ;
@@ -415,11 +526,15 @@ void ComputeValues( void * pvParameters )
      debugV("speedTicks = %u", speedTicks);
 
      diff = currentTime -gLastRPMComputedTime ;
-     if (diff > 3000)
+     if (diff > 60000)
      {
+#if 0      
        float timeSlots = 60000/diff ;
        debugV("FOR COMPUTE cadenceTicks = %u", cadenceTicks);
        gRPM =  cadenceTicks * timeSlots ;
+#endif
+       gRPM = cadenceTicks ; // True RPM, we will wait for one minute to get this
+       debugV("FOR COMPUTE cadenceTicks = %u", cadenceTicks);
        cadenceTicks = 0 ;
        gLastRPMComputedTime = currentTime ;
      }
@@ -453,6 +568,10 @@ void SetupDisplay()
    delay(1000);
    display.clearDisplay();   // clears the screen and buffer   
 }
+void ConfigureAsAccessPoint()
+{
+  
+}
 void setup() 
 {
   String formattedDate ;
@@ -477,15 +596,12 @@ void setup()
 
   pinMode(SPEED_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(SPEED_PIN), speedPinHandler, FALLING);
-  display.display();
-  display.clearDisplay();
-
-  display.display();
-  display.clearDisplay();
-
-  display.setTextSize(2);
-  display.setTextColor(BLACK);
   
+  display.display();
+  //display.clearDisplay();
+  delay(2000);
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
   display.setCursor(0,0);
   display.printf("Sensors:Ready \n");
 
@@ -499,7 +615,10 @@ void setup()
 
   DisplayConfigValues();
   Serial.printf("Configuratio file reading : Success \n");
-  setupWifi();
+  if (setupWifi() == false)
+  {
+     ConfigureAsAccessPoint(); 
+  }
   Serial.printf("WifiSetup : Success \n");
   display.printf("WiFi:Ready\n");
 
@@ -509,6 +628,7 @@ void setup()
   delay(2000);
   timeClient.update(); // Keep the device time up to date
   delay(5000);
+  debugV("FOR COMPUTE cadenceTicks = %u", cadenceTicks);
 
   formattedDate = timeClient.getFormattedDate(); 
   currentTime = timeClient.getFormattedTime(); 
@@ -567,8 +687,8 @@ void setup()
                     1);          /* pin task to core 0 */      
 
 
-#if 0
-  xTask CreatePinnedToCore(
+
+  xTaskCreatePinnedToCore(
                     MeasureHeartRate,   /* Task function. */
                     "Task3",     /* name of task. */
                     10000,       /* Stack size of task */
@@ -576,7 +696,7 @@ void setup()
                     1,           /* priority of the task */
                     &MeasureHeartRateTask,      /* Task handle to keep track of created task */
                     0);          /* pin task to core 0 */      
-#endif
+
 }
 
 void loop() 
