@@ -1,4 +1,3 @@
-
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WebServer.h>
@@ -17,6 +16,12 @@
 #include "SPIFFS.h"
  
 #include <ESP8266FtpServer.h>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
+
+#define DHTPIN 25    // Digital pin connected to the DHT sensor 
+#define DHTTYPE    DHT11     // DHT 11
 
 #include "MAX30105.h"
 
@@ -29,7 +34,10 @@
 #define SSID_NAME_LEN 20 
 #define SSID_PASSWD_LEN 20
 #define NAME_LEN 20
-
+#define FTP_USER_NAME "apollo11"
+#define FTP_PASSWORD  "eagle"
+#define CORE_ONE 1
+#define CORE_ZERO 0 
 
 FtpServer ftpSrv; 
 WebServer   webServer(WEBSERVER_PORT);
@@ -37,6 +45,7 @@ RemoteDebug Debug;
 WiFiUDP     ntpUDP;
 NTPClient   timeClient(ntpUDP);
 MAX30105    maxSensor;
+DHT_Unified dht(DHTPIN, DHTTYPE);
 
 const byte RATE_SIZE = 4; //Increase this for more averaging. 4 is good.
 byte rates[RATE_SIZE]; //Array of heart rates
@@ -47,10 +56,10 @@ float     beatsPerMinute;
 int       beatAvg;
 uint32_t  irBuffer[100]; //infrared LED sensor data
 uint32_t  redBuffer[100];  //red LED sensor data
-int32_t   bufferLength; //data length
+//int32_t   bufferLength; //data length
 int32_t   spo2; //SPO2 value
 int8_t    validSPO2; //indicator to show if the SPO2 calculation is valid
-int32_t   heartRate; //heart rate value
+//int32_t   heartRate; //heart rate value
 int8_t    validHeartRate; //indicator to show if the heart rate calculation is valid
 
 int8_t    idx =0;
@@ -81,6 +90,8 @@ float gLastRPMComputedTime = 0 ;
 float gLastSpeedComputedTime = 0 ; 
 int   gHeartRate = 0 ;
 float bodyTempInCelius=0.0 ;
+float gRoomTemp ;
+float gRoomHumidity ;
 
 /*
  * Login page
@@ -186,6 +197,7 @@ volatile byte  speedTicks = 0 ;
 TaskHandle_t   ComputeValuesTask;
 TaskHandle_t   DisplayValuesTask ;
 TaskHandle_t   MeasureHeartRateTask ;
+TaskHandle_t   MeasureTempHumidityTask ;
 
 char   recordFileName[NAME_LEN];
 
@@ -232,7 +244,7 @@ bool setupWifi()
     delay(1000);        
     Serial.print('*');    
     count++ ;
-    if (count > 20)
+    if (count > 40)
     {
        return false ;  
     }
@@ -381,76 +393,126 @@ void DisplayConfigValues()
    Serial.printf("Wheel Circumference = %f\n", ConfigData.wheelCirumference);
    Serial.printf("Device name = %s ", ConfigData.wifiDeviceName);
 }
+void DisplayRPM()
+{
+    byte rpm ;
+    display.setTextSize(1);
+    display.printf("RPM:");
+    rpm = (byte) gRPM ; // Display RPM as integer and not as float
+    display.setTextSize(2);
+    display.printf("%d\n",rpm);
+ 
+}
+void DisplayPower(float p)
+{
+    display.setTextSize(1);
+    display.printf("Pwr:");
+    display.setTextSize(2);
+    display.printf("%0.1f\n",p);
+}
+void DisplaySpeed()
+{
+    byte Speed ;
+    
+    Speed = round(gSpeed);
+    display.setTextSize(1);
+    display.printf("KM/H:");
+    display.setTextSize(2);
+    display.printf("%d\n",Speed);
+}
+
+void DisplayRoomTemp()
+{
+    display.setTextSize(1);
+    display.printf("T:");
+    display.setTextSize(2);
+    display.printf("%0.1f\n",gRoomTemp);
+}
+void DisplayRoomHumidity()
+{
+    display.setTextSize(1);
+    display.printf("H:");
+    display.setTextSize(2);
+    display.printf("%0.1f\n",gRoomHumidity);
+}
+void DisplayDistance()
+{
+
+ 
+}
+
+void DisplayHeartBeat()
+{
+    display.setTextSize(1);
+    display.printf("HB:");
+    display.setTextSize(2);
+    display.printf("%d\n",gHeartRate);
+}
+void DisplayBodyTemp()
+{
+  
+    display.setTextSize(1);
+    display.printf("BT:");    
+    display.setTextSize(2);
+    display.printf("%0.1fC\n",bodyTempInCelius);
+    delay(2000);
+}
+void ClearDisplay()
+{
+    display.display();
+    display.clearDisplay();
+    display.setTextColor(BLACK);
+    display.setCursor(0,0);
+}
 void DisplayValues( void * pvParameters )
 {
   boolean flag ;
-  float distance ;
   File  recordFile ;
-  byte rpm ;
-  byte Speed ;
+  float distance ;
+  String currentTime ;
+  int    len ; 
+  char   deviceTime[20] ;
+  float   Power ;
+
+
   flag = true ;
 
 
   while(flag)
   {
     distance = gTripDistance /1000 ; //Convert into KM
-
-    display.display();
-    display.clearDisplay();
-
-    display.setTextColor(BLACK);
-    display.setCursor(0,0);
-    display.setTextSize(1);
-    display.printf("RPM:");
-    rpm = (byte) gRPM ; // Display RPM as integer and not as float
-    display.setTextSize(2);
-    display.printf("%d\n",rpm);
-
-    Speed = round(gSpeed);
-    display.setTextSize(1);
-    display.printf("KM/H:");
-    display.setTextSize(2);
-    display.printf("%d\n",Speed);
-
-    display.setTextSize(1);
-    display.printf("HB:");
-    display.setTextSize(2);
-    display.printf("%d\n",gHeartRate);
-
-    delay(2000);
-
-    display.display();
-    display.clearDisplay();
-
+    currentTime = timeClient.getFormattedTime(); 
+    len = currentTime.length();
+    currentTime.toCharArray(deviceTime,len+1);
+    Power = (5.244820 * gSpeed) + (0.01968 * gSpeed * gSpeed * gSpeed) ;
+    
+    ClearDisplay();
+    DisplayRPM();
+    DisplaySpeed();
     display.setTextSize(1);
     display.printf("KM:");    
     display.setTextSize(2);
     display.printf("%0.1f\n",distance);
-
-    display.setTextSize(1);
-    display.printf("BT:");    
-    display.setTextSize(2);
-    display.printf("%0.1fC\n",bodyTempInCelius);
     delay(2000);
+    ClearDisplay();
+    DisplayPower(Power);
+    DisplayRoomTemp();
+    DisplayRoomHumidity();
+#if 0
+    ClearDisplay();
+    DisplayHeartBeat() ;
+    DisplayBodyTemp();
+#endif
 
     if (gSpeed > 0)
     {
-       String currentTime ;
-       int    len ; 
-       char   deviceTime[20] ;
-       
        // Do not record while cycle is stopped.
        
-       currentTime = timeClient.getFormattedTime(); 
-       
-       len = currentTime.length();
-       
-       currentTime.toCharArray(deviceTime,len+1);
        
        recordFile =  SPIFFS.open(recordFileName, FILE_APPEND);
 
-       recordFile.printf("%s, %0.1f,%0.1f,%0.1f, %d, %0.1f\n",
-                       deviceTime,gRPM,gSpeed,distance,gHeartRate,bodyTempInCelius);
+       recordFile.printf("%s, %0.1f,%0.1f,%0.1f,%0.1f,%0.1f,%0.1f\n",
+                       deviceTime,gRPM,gSpeed,distance,Power,gRoomTemp,gRoomHumidity);
        recordFile.close();
     }    
     delay(3000);
@@ -462,7 +524,11 @@ void MeasureHeartRate( void * pvParameters )
 {
   if (max30102Setup() == false)
   {
-    return ;
+    Serial.printf("MAX 300102 not found \n");
+    while(1) 
+    {
+      delay(10000); 
+    } // infinite loop 
   }
   while(1)
   {  
@@ -510,7 +576,34 @@ void MeasureHeartRate( void * pvParameters )
     }
   }
 }
+void MeasureTempHumidity(void *params)
+{
+    sensors_event_t event;
+    dht.begin();
 
+    while(1)
+    {
+       dht.temperature().getEvent(&event);
+       Serial.printf("Temp = %f \n",event.temperature);
+       if (isnan(event.temperature) == false) 
+       {
+         gRoomTemp = event.temperature ;
+       }
+       else
+          Serial.printf("Error in reading temp \n");
+       
+       dht.humidity().getEvent(&event);
+       Serial.printf("Temp = %f \n",event.relative_humidity);
+
+       if (isnan(event.relative_humidity) == false) 
+       {
+         gRoomHumidity = event.relative_humidity ;
+       }
+       else
+          Serial.printf("Error in reading humudity \n");
+       delay(60000);
+    }
+}
 void ComputeValues( void * pvParameters )
 {
   int currentTime  ;
@@ -596,13 +689,9 @@ void setup()
 
   pinMode(SPEED_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(SPEED_PIN), speedPinHandler, FALLING);
-  
-  display.display();
-  //display.clearDisplay();
   delay(2000);
-  display.setTextSize(1);
-  display.setTextColor(BLACK);
-  display.setCursor(0,0);
+
+  ClearDisplay();
   display.printf("Sensors:Ready \n");
 
 
@@ -617,10 +706,13 @@ void setup()
   Serial.printf("Configuratio file reading : Success \n");
   if (setupWifi() == false)
   {
-     ConfigureAsAccessPoint(); 
+      Serial.printf("WifiSetup: failed \n");
+      ConfigureAsAccessPoint(); 
   }
-  Serial.printf("WifiSetup : Success \n");
-  display.printf("WiFi:Ready\n");
+  else
+  {
+     Serial.printf("WiFiSetup:Success\n");
+  }
 
   timeClient.begin();
   timeClient.setTimeOffset(GMTOffset); /* GMT + 5:30 hours */
@@ -663,8 +755,8 @@ void setup()
   Debug.setResetCmdEnabled(true); // Enable the reset command
   Debug.showProfiler(true); // Profiler (Good to measure times, to optimize codes)
   Debug.showColors(true); // Colors
-  ftpSrv.begin("esp8266","esp8266");
-  Serial.printf("Web Server configuration: Success \n");
+  ftpSrv.begin(FTP_USER_NAME,FTP_PASSWORD);
+  Serial.printf("WeSuccessb Server configuration: Success \n");
   delay(2000);
   display.clearDisplay();
   
@@ -675,7 +767,7 @@ void setup()
                     NULL,        /* parameter of the task */
                     1,           /* priority of the task */
                     &ComputeValuesTask,      /* Task handle to keep track of created task */
-                    1);          /* pin task to core 0 */      
+                    CORE_ONE);          /* pin task to core 1 */      
 
   xTaskCreatePinnedToCore(
                     DisplayValues,   /* Task function. */
@@ -684,10 +776,18 @@ void setup()
                     NULL,        /* parameter of the task */
                     1,           /* priority of the task */
                     &DisplayValuesTask,      /* Task handle to keep track of created task */
-                    1);          /* pin task to core 0 */      
+                    CORE_ONE);          /* pin task to core 1 */      
 
+xTaskCreatePinnedToCore(
+                    MeasureTempHumidity,   /* Task function. */
+                    "Task3",     /* name of task. */
+                    10000,       /* Stack size of task */
+                    NULL,        /* parameter of the task */
+                    1,           /* priority of the task */
+                    &MeasureTempHumidityTask,      /* Task handle to keep track of created task */
+                    CORE_ZERO);          /* pin task to core 0 */      
 
-
+#if 0
   xTaskCreatePinnedToCore(
                     MeasureHeartRate,   /* Task function. */
                     "Task3",     /* name of task. */
@@ -695,8 +795,9 @@ void setup()
                     NULL,        /* parameter of the task */
                     1,           /* priority of the task */
                     &MeasureHeartRateTask,      /* Task handle to keep track of created task */
-                    0);          /* pin task to core 0 */      
+                    CORE_ZERO);          /* pin task to core 0 */      
 
+#endif
 }
 
 void loop() 
