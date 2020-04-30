@@ -27,6 +27,13 @@
 
 #include "heartRate.h"
 #include "spo2_algorithm.h"
+#define   ENABLE_PRINTF 1 
+
+#ifdef ENABLE_PRINTF 
+    #define    DEBUG_PRINTF(f,...)   Serial.printf(f,##__VA_ARGS__)
+#else
+    #define    DEBUG_PRINTF(f,...)
+#endif
 
 
 #define WEBSERVER_PORT 80
@@ -39,59 +46,51 @@
 #define CORE_ONE 1
 #define CORE_ZERO 0 
 
-FtpServer ftpSrv; 
-WebServer   webServer(WEBSERVER_PORT);
-RemoteDebug Debug;
-WiFiUDP     ntpUDP;
-NTPClient   timeClient(ntpUDP);
-MAX30105    maxSensor;
-DHT_Unified dht(DHTPIN, DHTTYPE);
+FtpServer     ftpSrv; 
+WebServer     webServer(WEBSERVER_PORT);
+RemoteDebug   Debug;
+WiFiUDP       ntpUDP;
+NTPClient     timeClient(ntpUDP);
+MAX30105      maxSensor;
 
-const byte RATE_SIZE = 4; //Increase this for more averaging. 4 is good.
-byte rates[RATE_SIZE]; //Array of heart rates
-byte rateSpot = 0;
-long lastBeat = 0; //Time at which the last beat occurred
-
-float     beatsPerMinute;
-int       beatAvg;
-uint32_t  irBuffer[100]; //infrared LED sensor data
-uint32_t  redBuffer[100];  //red LED sensor data
-//int32_t   bufferLength; //data length
-int32_t   spo2; //SPO2 value
-int8_t    validSPO2; //indicator to show if the SPO2 calculation is valid
-//int32_t   heartRate; //heart rate value
-int8_t    validHeartRate; //indicator to show if the heart rate calculation is valid
-
-int8_t    idx =0;
+const byte    RATE_SIZE = 4; //Increase this for more averaging. 4 is good.
+byte          rates[RATE_SIZE]; //Array of heart rates
+byte          rateSpot = 0;
+long          lastBeat = 0; //Time at which the last beat occurred
+float         beatsPerMinute;
+int           beatAvg;
+uint32_t      irBuffer[100]; //infrared LED sensor data
+uint32_t      redBuffer[100];  //red LED sensor data
+int32_t       spo2; //SPO2 value
+int8_t        validSPO2; //indicator to show if the SPO2 calculation is valid
+int8_t        validHeartRate; //indicator to show if the heart rate calculation is valid
+int8_t        idx =0;
 
 
 typedef struct configData 
 {
-  char ssid1[SSID_NAME_LEN]   ;
-  char password1[SSID_PASSWD_LEN]  ;
-  char ssid2[SSID_NAME_LEN] ;
-  char password2[SSID_PASSWD_LEN] ;
-  char ssid3[SSID_NAME_LEN] ;
-  char password3[SSID_PASSWD_LEN] ;
+  char     ssid1[SSID_NAME_LEN]   ;
+  char     password1[SSID_PASSWD_LEN]  ;
+  char     ssid2[SSID_NAME_LEN] ;
+  char     password2[SSID_PASSWD_LEN] ;
+  char     ssid3[SSID_NAME_LEN] ;
+  char     password3[SSID_PASSWD_LEN] ;
   float    wheelCirumference ;
-  // String   servername ;
-  // int      portNo;
-  // String   apiKey;
-  char    wifiDeviceName[NAME_LEN] ;  
+  char     wifiDeviceName[NAME_LEN] ;  
   
 };
 
 struct configData ConfigData ;
-WiFiMulti wifiMulti;          //  Create  an  instance  of  the ESP32WiFiMulti 
-float gRPM = 0.0 ;
-float gSpeed = 0.0 ;
-float gTripDistance = 0.0 ;
-float gLastRPMComputedTime = 0 ;
-float gLastSpeedComputedTime = 0 ; 
-int   gHeartRate = 0 ;
-float bodyTempInCelius=0.0 ;
-float gRoomTemp ;
-float gRoomHumidity ;
+WiFiMulti         wifiMulti;          //  Create  an  instance  of  the ESP32WiFiMulti 
+float             gRPM = 0.0 ;
+float             gSpeed = 0.0 ;
+float             gTripDistance = 0.0 ;
+float             gLastRPMComputedTime = 0 ;
+float             gLastSpeedComputedTime = 0 ; 
+int               gHeartRate = 0 ;
+float             bodyTempInCelius=0.0 ;
+float             gRoomTemp ;
+float             gRoomHumidity ;
 
 /*
  * Login page
@@ -185,15 +184,15 @@ const char* serverIndex = "<HTML>"
  "</script>"
  "</HTML>" ;
 
-const int PULSE_INPUT = 34;
-const byte CADENCE_PIN= 18 ;
-const byte SPEED_PIN = 19 ;
-const int THRESHOLD = 550;   // Adjust this number to avoid noise when idle
+const int   PULSE_INPUT = 34  ;
+const byte  CADENCE_PIN = 18  ;
+const byte  SPEED_PIN   = 19  ;
+const int   THRESHOLD   = 550 ;   // Adjust this number to avoid noise when idle
 
 volatile byte  prevCadenceTicks = 0;
 
 volatile byte  cadenceTicks = 0;
-volatile byte  speedTicks = 0 ;
+volatile byte  speedTicks   = 0 ;
 TaskHandle_t   ComputeValuesTask;
 TaskHandle_t   DisplayValuesTask ;
 TaskHandle_t   MeasureHeartRateTask ;
@@ -203,11 +202,11 @@ char   recordFileName[NAME_LEN];
 
 // Software SPI (slower updates, more flexible pin options):
 // GPIO14 - Serial clock out (SCLK)
-// GPIO13 - Serial data out (DIN)
 // GPIO27 - Data/Command select (D/C)
 // GPIO15 - LCD chip select (CS)
 // GPIO26 - LCD reset (RST)
 //Adafruit_PCD8544 display = Adafruit_PCD8544(7, 6, 5, 4, 3);
+
 
 // How connection are made to Display in ESP32
 //         *DISPLAY PINS                    SCLK   DIN    DC   CS     RST
@@ -221,7 +220,7 @@ bool max30102Setup()
   //Use default I2C port, 400kHz speed
   if (!maxSensor.begin(Wire, I2C_SPEED_STANDARD,MAX30105_ADDRESS)) 
   {
-     Serial.println("MAX30105 was not found. Please check wiring/power. ");
+     DEBUG_PRINTF("MAX30105 was not found. Please check wiring/power. ");
      return false ;
   }
 
@@ -242,7 +241,7 @@ bool setupWifi()
   { 
     //  Wait  for the Wi-Fi to  connect:  scan  for Wi-Fi networks, and connect to  the strongest of  the networks  above       
     delay(1000);        
-    Serial.print('*');    
+    DEBUG_PRINTF("*");    
     count++ ;
     if (count > 40)
     {
@@ -251,18 +250,18 @@ bool setupWifi()
   }   
   delay(5000);
   WiFi.setHostname(ConfigData.wifiDeviceName);
-  Serial.printf("\n");   
-  Serial.printf("Connected to  ");   
-  Serial.println(WiFi.SSID());         
-  Serial.printf("IP  address: ");   
-  Serial.println(WiFi.localIP()); 
+  DEBUG_PRINTF("\n");   
+  DEBUG_PRINTF("Connected to  ");   
+  DEBUG_PRINTF("%s\n",WiFi.SSID().c_str());         
+  DEBUG_PRINTF("IP  address: ");   
+  DEBUG_PRINTF("%s",WiFi.localIP().toString()); 
   WiFi.softAPdisconnect (true);   //Disable the Access point mode.
   return true ;
 }
 void showRecords()
 {
     char fileList[200];
-        Serial.printf("showRecords");
+        DEBUG_PRINTF("showRecords");
 
     File root = SPIFFS.open("/");
  
@@ -279,7 +278,7 @@ void showRecords()
   strcat(fileList,"<\OL> <\HTML>");
       webServer.sendHeader("Connection", "close");
     webServer.send(200, "text/html", fileList);
-    Serial.printf("%s \n", fileList);
+    DEBUG_PRINTF("%s \n", fileList);
     
 
 }
@@ -310,7 +309,7 @@ void setupWebHandler()
   }, []() {
     HTTPUpload& upload = webServer.upload();
     if (upload.status == UPLOAD_FILE_START) {
-      Serial.printf("Update: %s\n", upload.filename.c_str());
+      DEBUG_PRINTF("Update: %s\n", upload.filename.c_str());
       if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { //start with max available size
         Update.printError(Serial);
       }
@@ -321,7 +320,7 @@ void setupWebHandler()
       }
     } else if (upload.status == UPLOAD_FILE_END) {
       if (Update.end(true)) { //true to set the size to the current progress
-        Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
+        DEBUG_PRINTF("Update Success: %u\nRebooting...\n", upload.totalSize);
       } else {
         Update.printError(Serial);
       }
@@ -350,7 +349,7 @@ void ReadConfigValuesFromSPIFFS()
   
   if (jsonFile == NULL)
   {
-     Serial.printf("Unable to open %s",JSON_CONFIG_FILE_NAME);
+     DEBUG_PRINTF("Unable to open %s",JSON_CONFIG_FILE_NAME);
      return ;
   }
   
@@ -381,17 +380,17 @@ void ReadConfigValuesFromSPIFFS()
 }
 void DisplayConfigValues()
 {
-   Serial.printf("ssid1 %s \n",ConfigData.ssid1);
-   Serial.printf("Password %s \n", ConfigData.password1);
+   DEBUG_PRINTF("ssid1 %s \n",ConfigData.ssid1);
+   DEBUG_PRINTF("Password %s \n", ConfigData.password1);
 
-   Serial.printf("ssid2 %s \n",ConfigData.ssid2);
-   Serial.printf("Password2 %s \n", ConfigData.password2);
+   DEBUG_PRINTF("ssid2 %s \n",ConfigData.ssid2);
+   DEBUG_PRINTF("Password2 %s \n", ConfigData.password2);
 
-   Serial.printf("ssid3 %s \n",ConfigData.ssid3);
-   Serial.printf("Password3 %s \n", ConfigData.password3);
+   DEBUG_PRINTF("ssid3 %s \n",ConfigData.ssid3);
+   DEBUG_PRINTF("Password3 %s \n", ConfigData.password3);
 
-   Serial.printf("Wheel Circumference = %f\n", ConfigData.wheelCirumference);
-   Serial.printf("Device name = %s ", ConfigData.wifiDeviceName);
+   DEBUG_PRINTF("Wheel Circumference = %f\n", ConfigData.wheelCirumference);
+   DEBUG_PRINTF("Device name = %s ", ConfigData.wifiDeviceName);
 }
 void DisplayRPM()
 {
@@ -467,11 +466,11 @@ void ClearDisplay()
 void DisplayValues( void * pvParameters )
 {
   boolean flag ;
-  File  recordFile ;
-  float distance ;
-  String currentTime ;
-  int    len ; 
-  char   deviceTime[20] ;
+  File    recordFile ;
+  float   distance ;
+  String  currentTime ;
+  int     len ; 
+  char    deviceTime[20] ;
   float   Power ;
 
 
@@ -485,7 +484,7 @@ void DisplayValues( void * pvParameters )
     len = currentTime.length();
     currentTime.toCharArray(deviceTime,len+1);
     Power = (5.244820 * gSpeed) + (0.01968 * gSpeed * gSpeed * gSpeed) ;
-    
+#if 0    
     ClearDisplay();
     DisplayRPM();
     DisplaySpeed();
@@ -494,8 +493,10 @@ void DisplayValues( void * pvParameters )
     display.setTextSize(2);
     display.printf("%0.1f\n",distance);
     delay(2000);
-    ClearDisplay();
-    DisplayPower(Power);
+#endif
+    //ClearDisplay();
+    //DisplayPower(Power);
+    DisplayHeartBeat();
     DisplayRoomTemp();
     DisplayRoomHumidity();
 #if 0
@@ -522,14 +523,6 @@ void DisplayValues( void * pvParameters )
 
 void MeasureHeartRate( void * pvParameters )
 {
-  if (max30102Setup() == false)
-  {
-    Serial.printf("MAX 300102 not found \n");
-    while(1) 
-    {
-      delay(10000); 
-    } // infinite loop 
-  }
   while(1)
   {  
     long irValue = maxSensor.getIR();
@@ -539,9 +532,9 @@ void MeasureHeartRate( void * pvParameters )
 
     if (checkForBeat(irValue) == true)
     {
-      //We sensed a beat!
+      // We sensed a beat!
       long delta = millis() - lastBeat;
-      //Serial.printf("Delta = %d \n", delta);
+      //DEBUG_PRINTF("Delta = %d \n", delta);
       lastBeat = millis();
 
       beatsPerMinute = 60 / (delta / 1000.0);
@@ -563,44 +556,51 @@ void MeasureHeartRate( void * pvParameters )
 
     if (irValue > 50000)
     {
-       if (idx == 100)
+      
+      if (idx == 100)
       {
-         Serial.printf("Avg BPM:%d\n",beatAvg);
+         DEBUG_PRINTF("Avg BPM:%d\n",beatAvg);
+         Debug.printf("Avg BPM:%d\n",beatAvg);
          gHeartRate = beatAvg ;
          idx = 0 ;
       }
+      
     }
     else
     {
-      Serial.printf(" No finger?\n");
+      DEBUG_PRINTF(" No finger?\n");
+      Debug.printf(" No finger?\n");
     }
   }
 }
+
 void MeasureTempHumidity(void *params)
 {
+    DHT_Unified   dht(DHTPIN, DHTTYPE);
+
     sensors_event_t event;
     dht.begin();
 
     while(1)
     {
        dht.temperature().getEvent(&event);
-       Serial.printf("Temp = %f \n",event.temperature);
+       DEBUG_PRINTF("Temp = %f \n",event.temperature);
        if (isnan(event.temperature) == false) 
        {
          gRoomTemp = event.temperature ;
        }
        else
-          Serial.printf("Error in reading temp \n");
+          DEBUG_PRINTF("Error in reading temp \n");
        
        dht.humidity().getEvent(&event);
-       Serial.printf("Temp = %f \n",event.relative_humidity);
+       DEBUG_PRINTF("Temp = %f \n",event.relative_humidity);
 
        if (isnan(event.relative_humidity) == false) 
        {
          gRoomHumidity = event.relative_humidity ;
        }
        else
-          Serial.printf("Error in reading humudity \n");
+          DEBUG_PRINTF("Error in reading humudity \n");
        delay(60000);
     }
 }
@@ -608,8 +608,8 @@ void ComputeValues( void * pvParameters )
 {
   int currentTime  ;
   int diff ;
-  Serial.printf("Core ID where Computer Values running is : ");
-  Serial.println(xPortGetCoreID());
+  DEBUG_PRINTF("Core ID where Computer Values running is : %d",xPortGetCoreID());
+ 
 
   while(1)
   {
@@ -653,7 +653,7 @@ void ComputeValues( void * pvParameters )
 
 void SetupDisplay()
 {
-   Serial.printf("Setup Display");
+   DEBUG_PRINTF("Setup Display");
    display.begin();
    //display.setContrast(60);
 
@@ -680,9 +680,9 @@ void setup()
 
   int GMTOffset = 19800;
 
-  SetupDisplay();
+  //SetupDisplay();
   Serial.begin(115200);
-  Serial.printf("Speedo");
+  DEBUG_PRINTF("Speedo");
 
   pinMode(CADENCE_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(CADENCE_PIN), cadencePinHandler, FALLING);
@@ -691,8 +691,8 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(SPEED_PIN), speedPinHandler, FALLING);
   delay(2000);
 
-  ClearDisplay();
-  display.printf("Sensors:Ready \n");
+  //ClearDisplay();
+  //display.printf("Sensors:Ready \n");
 
 
   SPIFFS.begin(true) ;
@@ -700,18 +700,18 @@ void setup()
   //SPIFFS.format();
   
   ReadConfigValuesFromSPIFFS();
-  display.printf("Files:Ready\n");
+  //display.printf("Files:Ready\n");
 
   DisplayConfigValues();
-  Serial.printf("Configuratio file reading : Success \n");
+  DEBUG_PRINTF("Configuratio file reading : Success \n");
   if (setupWifi() == false)
   {
-      Serial.printf("WifiSetup: failed \n");
+      DEBUG_PRINTF("WifiSetup: failed \n");
       ConfigureAsAccessPoint(); 
   }
   else
   {
-     Serial.printf("WiFiSetup:Success\n");
+     DEBUG_PRINTF("WiFiSetup:Success\n");
   }
 
   timeClient.begin();
@@ -724,21 +724,21 @@ void setup()
 
   formattedDate = timeClient.getFormattedDate(); 
   currentTime = timeClient.getFormattedTime(); 
-  Serial.printf("Current Date = %s \n", formattedDate);
-  Serial.printf("Current time = %s \n", currentTime);
+  DEBUG_PRINTF("Current Date = %s \n", formattedDate);
+  DEBUG_PRINTF("Current time = %s \n", currentTime);
   currentTime.replace(':','_');
   
   splitT = formattedDate.indexOf("T");
   dayStamp = formattedDate.substring(0, splitT);
-  Serial.println(dayStamp);
+  //Serial.println(dayStamp);
 
   dayStamp.remove(0,5);
   splitDash = dayStamp.indexOf("-");
   month = dayStamp.substring(0,splitDash);
   monthArrayIdx = month.toInt();
-  Serial.println(dayStamp);
-  Serial.println(month);
-  Serial.printf("Month idx = %d \n",monthArrayIdx);
+  //Serial.println(dayStamp);
+ // Serial.println(month);
+  DEBUG_PRINTF("Month idx = %d \n",monthArrayIdx);
   dayStamp.remove(0,3);
   
   len = dayStamp.length();
@@ -747,19 +747,18 @@ void setup()
   len = currentTime.length();
   currentTime.toCharArray(deviceTime,len+1);
   sprintf(recordFileName,"/%s%s%s.csv",deviceDate,monthArray[monthArrayIdx-1],deviceTime);
-  Serial.printf("File name = %s \n", recordFileName);
+  DEBUG_PRINTF("File name = %s \n", recordFileName);
   
   setupWebHandler();
-  display.printf("Web Server:Ready\n");
+  //display.printf("Web Server:Ready\n");
   Debug.begin(ConfigData.wifiDeviceName); // Initialize the WiFi server
   Debug.setResetCmdEnabled(true); // Enable the reset command
   Debug.showProfiler(true); // Profiler (Good to measure times, to optimize codes)
   Debug.showColors(true); // Colors
   ftpSrv.begin(FTP_USER_NAME,FTP_PASSWORD);
-  Serial.printf("WeSuccessb Server configuration: Success \n");
+  DEBUG_PRINTF("WeSuccessb Server configuration: Success \n");
   delay(2000);
-  display.clearDisplay();
-  
+  //display.clearDisplay();
   xTaskCreatePinnedToCore(
                     ComputeValues,   /* Task function. */
                     "Task1",     /* name of task. */
@@ -777,8 +776,8 @@ void setup()
                     1,           /* priority of the task */
                     &DisplayValuesTask,      /* Task handle to keep track of created task */
                     CORE_ONE);          /* pin task to core 1 */      
-
-xTaskCreatePinnedToCore(
+#if 0
+  xTaskCreatePinnedToCore(
                     MeasureTempHumidity,   /* Task function. */
                     "Task3",     /* name of task. */
                     10000,       /* Stack size of task */
@@ -786,18 +785,25 @@ xTaskCreatePinnedToCore(
                     1,           /* priority of the task */
                     &MeasureTempHumidityTask,      /* Task handle to keep track of created task */
                     CORE_ZERO);          /* pin task to core 0 */      
-
-#if 0
-  xTaskCreatePinnedToCore(
-                    MeasureHeartRate,   /* Task function. */
-                    "Task3",     /* name of task. */
-                    10000,       /* Stack size of task */
-                    NULL,        /* parameter of the task */
-                    1,           /* priority of the task */
-                    &MeasureHeartRateTask,      /* Task handle to keep track of created task */
-                    CORE_ZERO);          /* pin task to core 0 */      
-
 #endif
+  pinMode(22, INPUT_PULLUP);
+
+  if (max30102Setup() == true)
+  {
+      xTaskCreatePinnedToCore(
+                      MeasureHeartRate,   /* Task function. */
+                     "Task4",     /* name of task. */
+                     10000,       /* Stack size of task */
+                     NULL,        /* parameter of the task */
+                     1,           /* priority of the task */
+                     &MeasureHeartRateTask,      /* Task handle to keep track of created task */
+                     CORE_ZERO);          /* pin task to core 0 */      
+  }
+  else
+  {
+    DEBUG_PRINTF("MAX 300102 not found \n");
+  }
+
 }
 
 void loop() 
@@ -808,12 +814,13 @@ void loop()
   
   if (prevCadenceTicks != cadenceTicks )
   {
-    Serial.printf("prev-%d current-%d s-%d\n",prevCadenceTicks, cadenceTicks,speedTicks);
+    DEBUG_PRINTF("prev-%d current-%d s-%d\n",prevCadenceTicks, cadenceTicks,speedTicks);
     prevCadenceTicks = cadenceTicks ;
   }
   
   Debug.handle();
   yield();
+  
 
   // put your main code here, to run repeatedly:
 
