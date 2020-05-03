@@ -100,6 +100,7 @@ const char* loginIndex =
     "<table width='20%' bgcolor='A09F9F' align='center'>"
         "<tr>"
             "<td colspan=2>"
+
                 "<center><font size=4><b>ESP32 Login Page</b></font></center>"
                 "<br>"
             "</td>"
@@ -184,10 +185,10 @@ const char* serverIndex = "<HTML>"
  "</script>"
  "</HTML>" ;
 
-const int   PULSE_INPUT = 34  ;
-const byte  CADENCE_PIN = 18  ;
-const byte  SPEED_PIN   = 19  ;
-const int   THRESHOLD   = 550 ;   // Adjust this number to avoid noise when idle
+const int      PULSE_INPUT = 34  ;
+const byte     CADENCE_PIN = 18  ;
+const byte     SPEED_PIN   = 19  ;
+const int      THRESHOLD   = 550 ;   // Adjust this number to avoid noise when idle
 
 volatile byte  prevCadenceTicks = 0;
 
@@ -198,7 +199,7 @@ TaskHandle_t   DisplayValuesTask ;
 TaskHandle_t   MeasureHeartRateTask ;
 TaskHandle_t   MeasureTempHumidityTask ;
 
-char   recordFileName[NAME_LEN];
+char            recordFileName[NAME_LEN];
 
 // Software SPI (slower updates, more flexible pin options):
 // GPIO14 - Serial clock out (SCLK)
@@ -260,14 +261,14 @@ bool setupWifi()
 }
 void showRecords()
 {
-    char fileList[200];
-        DEBUG_PRINTF("showRecords");
-
-    File root = SPIFFS.open("/");
+  char fileList[200];
+  DEBUG_PRINTF("showRecords");
+  File root = SPIFFS.open("/");
  
   File file = root.openNextFile();
 
   sprintf(fileList, "<HTML> <H1> List of Records <\H1> <OL>");
+  
   while(file)
   {
       char fileName[30] ;
@@ -276,11 +277,9 @@ void showRecords()
       file = root.openNextFile();
   }
   strcat(fileList,"<\OL> <\HTML>");
-      webServer.sendHeader("Connection", "close");
-    webServer.send(200, "text/html", fileList);
-    DEBUG_PRINTF("%s \n", fileList);
-    
-
+  webServer.sendHeader("Connection", "close");
+  webServer.send(200, "text/html", fileList);
+  DEBUG_PRINTF("%s \n", fileList);
 }
 void DisplayserverIndex()
 {
@@ -294,6 +293,8 @@ void DisplayLoginIndex()
     webServer.send(200, "text/html", loginIndex);
 
 }
+
+
 void setupWebHandler()
 {
    /*return index page which is stored in serverIndex */
@@ -301,6 +302,7 @@ void setupWebHandler()
   webServer.on("/showRecord", HTTP_POST, showRecords);
   webServer.on("/", HTTP_GET, DisplayLoginIndex);
   webServer.on("/serverIndex", HTTP_GET, DisplayserverIndex);
+
   /*handling uploading firmware file */
   webServer.on("/update", HTTP_POST, []() {
     webServer.sendHeader("Connection", "close");
@@ -484,7 +486,7 @@ void DisplayValues( void * pvParameters )
     len = currentTime.length();
     currentTime.toCharArray(deviceTime,len+1);
     Power = (5.244820 * gSpeed) + (0.01968 * gSpeed * gSpeed * gSpeed) ;
-#if 0    
+
     ClearDisplay();
     DisplayRPM();
     DisplaySpeed();
@@ -493,12 +495,13 @@ void DisplayValues( void * pvParameters )
     display.setTextSize(2);
     display.printf("%0.1f\n",distance);
     delay(2000);
-#endif
-    //ClearDisplay();
-    //DisplayPower(Power);
+#if 0
+    ClearDisplay();
+    DisplayPower(Power);
     DisplayHeartBeat();
     DisplayRoomTemp();
     DisplayRoomHumidity();
+#endif 
 #if 0
     ClearDisplay();
     DisplayHeartBeat() ;
@@ -680,7 +683,7 @@ void setup()
 
   int GMTOffset = 19800;
 
-  //SetupDisplay();
+  SetupDisplay();
   Serial.begin(115200);
   DEBUG_PRINTF("Speedo");
 
@@ -691,16 +694,16 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(SPEED_PIN), speedPinHandler, FALLING);
   delay(2000);
 
-  //ClearDisplay();
-  //display.printf("Sensors:Ready \n");
+  ClearDisplay();
+  display.printf("Sensors:Ready \n");
 
 
   SPIFFS.begin(true) ;
   
   //SPIFFS.format();
-  
+      
   ReadConfigValuesFromSPIFFS();
-  //display.printf("Files:Ready\n");
+  display.printf("Files:Ready\n");
 
   DisplayConfigValues();
   DEBUG_PRINTF("Configuratio file reading : Success \n");
@@ -750,7 +753,7 @@ void setup()
   DEBUG_PRINTF("File name = %s \n", recordFileName);
   
   setupWebHandler();
-  //display.printf("Web Server:Ready\n");
+  display.printf("Web Server:Ready\n");
   Debug.begin(ConfigData.wifiDeviceName); // Initialize the WiFi server
   Debug.setResetCmdEnabled(true); // Enable the reset command
   Debug.showProfiler(true); // Profiler (Good to measure times, to optimize codes)
@@ -758,7 +761,7 @@ void setup()
   ftpSrv.begin(FTP_USER_NAME,FTP_PASSWORD);
   DEBUG_PRINTF("WeSuccessb Server configuration: Success \n");
   delay(2000);
-  //display.clearDisplay();
+  display.clearDisplay();
   xTaskCreatePinnedToCore(
                     ComputeValues,   /* Task function. */
                     "Task1",     /* name of task. */
@@ -776,7 +779,7 @@ void setup()
                     1,           /* priority of the task */
                     &DisplayValuesTask,      /* Task handle to keep track of created task */
                     CORE_ONE);          /* pin task to core 1 */      
-#if 0
+
   xTaskCreatePinnedToCore(
                     MeasureTempHumidity,   /* Task function. */
                     "Task3",     /* name of task. */
@@ -785,8 +788,6 @@ void setup()
                     1,           /* priority of the task */
                     &MeasureTempHumidityTask,      /* Task handle to keep track of created task */
                     CORE_ZERO);          /* pin task to core 0 */      
-#endif
-  pinMode(22, INPUT_PULLUP);
 
   if (max30102Setup() == true)
   {
